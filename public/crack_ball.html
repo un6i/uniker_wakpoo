@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Crack Ball</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:transparent; height:100%; }
+  canvas { display:block; touch-action:none; }
+  #hint, #gaugeWrap { display:none !important; }
+  #hint {
+    position:fixed; bottom:172px; left:0; right:0; text-align:center;
+    color:rgba(255,255,255,.45); font-family:sans-serif; font-size:14px;
+    pointer-events:none; transition:opacity 1s;
+  }
+  #gaugeWrap {
+    position:fixed; top:20px; left:50%; transform:translateX(-50%);
+    width:min(280px, 70vw); pointer-events:none; font-family:sans-serif;
+  }
+  #gaugeLabel {
+    text-align:center; color:rgba(255,255,255,.6); font-size:12px;
+    margin-bottom:6px; letter-spacing:.5px;
+  }
+  #gaugeBar {
+    height:10px; border-radius:6px; background:rgba(255,255,255,.12);
+    overflow:hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,.4);
+  }
+  #gaugeFill {
+    height:100%; width:0%; border-radius:6px;
+    background:#8ecb4a; transition:width .12s linear, background .3s;
+  }
+  .danger #gaugeFill { animation:pulse .5s infinite alternate; }
+  @keyframes pulse { from{filter:brightness(1);} to{filter:brightness(1.6);} }
+</style>
+</head>
+<body>
+<div id="gaugeWrap">
+  <div id="gaugeLabel">CRACK 0%</div>
+  <div id="gaugeBar"><div id="gaugeFill"></div></div>
+</div>
+<div id="hint">짧게 톡톡 7번 · 길게 꾹 5초 → 펑!</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 0);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = null;
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 0.08, 2.42);
+camera.lookAt(0, 0.05, 0);
+
+// ---------- lights ----------
+scene.add(new THREE.AmbientLight(0x8899aa, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.85);
+key.position.set(-2, 3, 3);
+scene.add(key);
+const spec = new THREE.PointLight(0xffffff, 0.9, 30);
+spec.position.set(-1.6, 2.2, 3.2);
+scene.add(spec);
+const rim = new THREE.DirectionalLight(0xbfffcc, 0.25);
+rim.position.set(2, -1, -2);
+scene.add(rim);
+
+// ---------- crack texture (voronoi, seam-free via 3D sites) ----------
+const TW = 1024, TH = 512;
+const NSITES = 46;
+const MAXW = 15;
+const DMG_THRESH = 0.10;
+
+const sites = [];
+{
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < NSITES; i++) {
+    const y = 1 - (i + 0.5) * 2 / NSITES;
+    const r = Math.sqrt(1 - y*y);
+    const th = ga * i + (Math.random()-0.5)*0.9;
+    let v = new THREE.Vector3(Math.cos(th)*r, y, Math.sin(th)*r);
+    v.add(new THREE.Vector3((Math.random()-.5)*.25,(Math.random()-.5)*.25,(Math.random()-.5)*.25)).normalize();
+    sites.push(v);
+  }
+}
+
+const own = new Int16Array(TW*TH);
+{
+  const sx=[], sy=[], sz=[];
+  for (const s of sites){ sx.push(s.x); sy.push(s.y); sz.push(s.z); }
+  for (let py = 0; py < TH; py++) {
+    const phi = (py + 0.5)/TH * Math.PI;
+    const dy = Math.cos(phi), sr = Math.sin(phi);
+    for (let px = 0; px < TW; px++) {
+      const theta = (px + 0.5)/TW * Math.PI*2;
+      const dx = -Math.cos(theta)*sr, dz = Math.sin(theta)*sr;
+      let best = -2, bi = 0;
+      for (let s = 0; s < NSITES; s++) {
+        const d = dx*sx[s] + dy*sy[s] + dz*sz[s];
+        if (d > best) { best = d; bi = s; }
+      }
+      own[py*TW+px] = bi;
+    }
+  }
+}
+
+const dist = new Float32Array(TW*TH).fill(1e6);
+{
+  for (let y = 0; y < TH; y++) {
+    for (let x = 0; x < TW; x++) {
+      const i = y*TW+x;
+      const o = own[i];
+      const xr = (x+1)%TW;
+      if (own[y*TW+xr] !== o || (y+1<TH && own[(y+1)*TW+x] !== o)) dist[i] = 0;
+    }
+  }
+  const D1 = 1, D2 = 1.4142;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < TH; y++) for (let x = 0; x < TW; x++) {
+      const i=y*TW+x; let d=dist[i];
+      const xl=(x-1+TW)%TW;
+      d=Math.min(d, dist[y*TW+xl]+D1);
+      if(y>0){ d=Math.min(d, dist[(y-1)*TW+x]+D1, dist[(y-1)*TW+xl]+D2, dist[(y-1)*TW+(x+1)%TW]+D2); }
+      dist[i]=d;
+    }
+    for (let y = TH-1; y >= 0; y--) for (let x = TW-1; x >= 0; x--) {
+      const i=y*TW+x; let d=dist[i];
+      const xr=(x+1)%TW;
+      d=Math.min(d, dist[y*TW+xr]+D1);
+      if(y<TH-1){ d=Math.min(d, dist[(y+1)*TW+x]+D1, dist[(y+1)*TW+xr]+D2, dist[(y+1)*TW+(x-1+TW)%TW]+D2); }
+      dist[i]=d;
+    }
+  }
+}
+
+const damage = new Float32Array(TW*TH);
+
+const texCanvas = document.createElement('canvas');
+texCanvas.width = TW; texCanvas.height = TH;
+const tctx = texCanvas.getContext('2d');
+const imgData = tctx.createImageData(TW, TH);
+
+const GR=[127,194,65], CR=[221,221,209];
+function repaint(){
+  const d = imgData.data;
+  // whole-ball crack level rises with break progress (staged like the reference)
+  const base = progress * 0.85;
+  for (let i = 0; i < TW*TH; i++) {
+    const dm = damage[i] + base;
+    let a = 0;
+    if (dm > DMG_THRESH) {
+      const w = (dm - DMG_THRESH) * MAXW;
+      a = (w - dist[i]) / 1.6 + 0.5;
+      a = a < 0 ? 0 : a > 1 ? 1 : a;
+    }
+    const j = i*4;
+    d[j]   = GR[0] + (CR[0]-GR[0])*a;
+    d[j+1] = GR[1] + (CR[1]-GR[1])*a;
+    d[j+2] = GR[2] + (CR[2]-GR[2])*a;
+    d[j+3] = 255;
+  }
+  tctx.putImageData(imgData, 0, 0);
+  texture.needsUpdate = true;
+}
+
+const texture = new THREE.CanvasTexture(texCanvas);
+texture.wrapS = THREE.RepeatWrapping;
+
+function stampDamage(u, v, amt, radiusPx){
+  const cx = Math.round(u*TW), cy = Math.round((1-v)*TH);
+  const R = Math.ceil(radiusPx*2.2);
+  const s2 = 2*radiusPx*radiusPx;
+  const lat = Math.sin(Math.max(0.08, (cy+0.5)/TH*Math.PI));
+  const Rx = Math.ceil(R/lat);
+  for (let dy = -R; dy <= R; dy++) {
+    const y = cy+dy; if (y<0||y>=TH) continue;
+    for (let dx = -Rx; dx <= Rx; dx++) {
+      const x = ((cx+dx)%TW+TW)%TW;
+      const ex = dx*lat;
+      const g = Math.exp(-(ex*ex+dy*dy)/s2);
+      const i = y*TW+x;
+      damage[i] = Math.min(1.6, damage[i] + amt*g);
+    }
+  }
+}
+
+// small cracks scattered over the whole ball (weaker than the touch point)
+function stampGlobal(amt){
+  for (let k = 0; k < 4; k++) {
+    stampDamage(Math.random(), Math.random(), amt*(0.4+Math.random()*0.6), 14+Math.random()*20);
+  }
+}
+
+// ---------- ball ----------
+const R = 1;
+const ballGeo = new THREE.SphereGeometry(R, 128, 96);
+const basePos = ballGeo.attributes.position.array.slice();
+const ballMat = new THREE.MeshPhongMaterial({
+  map: texture,
+  shininess: 42,                        // softer, rubbery sheen
+  specular: new THREE.Color(0x5a5a5a),
+});
+const ball = new THREE.Mesh(ballGeo, ballMat);
+scene.add(ball);
+
+// ---------- dents ----------
+const dents = [];
+const DENT_ANG = 0.55;
+const TAP_DEPTH = 0.22;
+const HOLD_DEPTH = 0.46;   // long press sinks much deeper
+const RECOVER = 0.988;
+
+function vibrate(p){ if (navigator.vibrate) try{ navigator.vibrate(p); }catch(e){} }
+
+const STRETCH_K = 1.7; // how much clay gets dragged sideways
+function applyDents(){
+  const pos = ballGeo.attributes.position;
+  const arr = pos.array;
+  const n = pos.count;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const bx = basePos[i*3], by = basePos[i*3+1], bz = basePos[i*3+2];
+    v.set(bx, by, bz).normalize();
+    let disp = 0, tx = 0, ty = 0, tz = 0;
+    for (const d of dents) {
+      const ang = Math.acos(Math.min(1, Math.max(-1, v.dot(d.dir))));
+      const aw = d.ang || DENT_ANG;
+      if (ang < aw*1.75) {
+        const t = ang / aw;
+        let fall;
+        if (t < 1) {
+          fall = (1 - t*t)*(1 - t*t);
+        } else {
+          // subtle bulge ring (clay pushes out just a little)
+          const t2 = (t - 1) / 0.75;
+          fall = -0.10 * Math.sin(Math.PI * Math.min(t2, 1)) * (t2 < 1 ? 1 : 0);
+        }
+        disp += d.depth * fall;
+        if (d.tan && t < 1.3) { // smear: pull surface along the drag direction
+          const tf = d.depth * Math.max(0, fall) * STRETCH_K;
+          tx += d.tan.x*tf; ty += d.tan.y*tf; tz += d.tan.z*tf;
+        }
+      }
+    }
+    if (disp > 0.55) disp = 0.55;
+    if (disp < -0.16) disp = -0.16;
+    const s = 1 - disp;
+    arr[i*3] = bx*s + tx; arr[i*3+1] = by*s + ty; arr[i*3+2] = bz*s + tz;
+  }
+  pos.needsUpdate = true;
+  ballGeo.computeVertexNormals();
+}
+
+// ---------- break progress ----------
+// 7 short taps OR 5s of holding -> burst
+let progress = 0;          // 0..1
+const TAP_STEP = 1/7;
+const HOLD_FULL = 5.0;     // seconds of holding for full break
+let exploded = false, respawnT = 0;
+
+// flakes get smaller as the ball nears bursting
+function flakeScale(){ return 1 - progress*0.72; }
+
+// ---------- flakes ----------
+const flakes = [];
+function spawnFlakes(point, count, sizeMul, speedMul){
+  sizeMul = (sizeMul||1) * flakeScale();
+  speedMul = speedMul||1;
+  for (let k = 0; k < count; k++) {
+    const s = (0.02 + Math.random()*0.04) * Math.max(0.25, sizeMul);
+    const g = new THREE.PlaneGeometry(s, s*(0.6+Math.random()*0.8));
+    const m = new THREE.MeshPhongMaterial({
+      color: new THREE.Color().setRGB(0.55+Math.random()*0.2, 0.85, 0.3),
+      side: THREE.DoubleSide, transparent: true, opacity: 1
+    });
+    const f = new THREE.Mesh(g, m);
+    f.position.copy(point).multiplyScalar(1.02);
+    const out = point.clone().normalize();
+    f.userData = {
+      vel: out.multiplyScalar((0.4+Math.random()*0.6)*speedMul)
+             .add(new THREE.Vector3((Math.random()-.5)*.5, 0.2*Math.random(), (Math.random()-.5)*.5)),
+      rot: new THREE.Vector3(Math.random()*7, Math.random()*7, Math.random()*7),
+      life: 2.2
+    };
+    scene.add(f); flakes.push(f);
+  }
+}
+
+// ---------- explosion ----------
+function explode(){
+  exploded = true;
+  respawnT = 3.2;
+  pressing = false;
+  if (activeDent) { activeDent.active = false; activeDent = null; }
+  ball.visible = false;
+  ball.position.set(0,0,0);
+  ball.scale.set(1,1,1);
+  vibrate([80,40,140]);
+  document.getElementById('hint').style.opacity = 0;
+
+  // big shards -> small shards mix, flying outward
+  for (let k = 0; k < 140; k++) {
+    const dir = new THREE.Vector3().randomDirection ?
+      new THREE.Vector3().randomDirection() :
+      new THREE.Vector3(Math.random()*2-1, Math.random()*2-1, Math.random()*2-1).normalize();
+    const big = k < 30;
+    const s = big ? 0.09 + Math.random()*0.12 : 0.015 + Math.random()*0.05;
+    const g = new THREE.PlaneGeometry(s, s*(0.5+Math.random()));
+    const shade = 0.45 + Math.random()*0.35;
+    const m = new THREE.MeshPhongMaterial({
+      color: new THREE.Color().setRGB(shade*0.75, shade*1.15, shade*0.4),
+      side: THREE.DoubleSide, transparent: true, opacity: 1,
+      shininess: 70, specular: 0x555555
+    });
+    const f = new THREE.Mesh(g, m);
+    f.position.copy(dir).multiplyScalar(0.3 + Math.random()*0.7);
+    f.rotation.set(Math.random()*6, Math.random()*6, Math.random()*6);
+    f.userData = {
+      vel: dir.clone().multiplyScalar(1.6 + Math.random()*2.6),
+      rot: new THREE.Vector3(Math.random()*10, Math.random()*10, Math.random()*10),
+      life: 2.6 + Math.random()
+    };
+    scene.add(f); flakes.push(f);
+  }
+}
+
+function respawn(){
+  exploded = false;
+  progress = 0;
+  damage.fill(0);
+  dents.length = 0;
+  applyDents();
+  repaint();
+  ball.visible = true;
+}
+
+// ---------- interaction ----------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const _pushTarget = new THREE.Vector3();
+const _zero = new THREE.Vector3(0,0,0);
+const _one = new THREE.Vector3(1,1,1);
+let wob = 0, wobVel = 0; // whole-ball jelly wobble
+const gaugeFill = document.getElementById('gaugeFill');
+const gaugeLabel = document.getElementById('gaugeLabel');
+const gaugeWrap = document.getElementById('gaugeWrap');
+let pressing = false, pressT = 0;
+let hitUV = null, hitDir = null, hitPoint = null, activeDent = null;
+let repaintTimer = 0, hintShown = true;
+
+function pick(e){
+  pointer.x = (e.clientX/innerWidth)*2 - 1;
+  pointer.y = -(e.clientY/innerHeight)*2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(ball);
+  return hits.length ? hits[0] : null;
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (exploded) return;
+  const hit = pick(e);
+  if (!hit) return;
+  e.preventDefault();
+  pressing = true; pressT = 0;
+  hitUV = hit.uv.clone();
+  hitPoint = hit.point.clone();
+  hitDir = hit.point.clone().normalize();
+  activeDent = { dir: hitDir, depth: 0, active: true, ang: DENT_ANG, tan: new THREE.Vector3() };
+  dents.push(activeDent);
+  vibrate(18);
+  if (hintShown){ document.getElementById('hint').style.opacity = 0; hintShown = false; }
+});
+
+// drag while pressing: dent follows the finger, clay stretches & leaves a trail
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!pressing || exploded || !activeDent) return;
+  const hit = pick(e);
+  if (!hit) return;
+  const newDir = hit.point.clone().normalize();
+  const ang = activeDent.dir.angleTo(newDir);
+  if (ang > 0.002) {
+    // tangential drag vector (direction the clay is being pushed)
+    const delta = newDir.clone().sub(activeDent.dir);
+    delta.sub(activeDent.dir.clone().multiplyScalar(activeDent.dir.dot(delta)));
+    if (delta.lengthSq() > 1e-8) {
+      activeDent.tan.addScaledVector(delta.normalize(), Math.min(0.4, ang*2.6));
+      if (activeDent.tan.length() > 0.55) activeDent.tan.setLength(0.55);
+    }
+    if (ang > 0.085) {
+      // leave a smeared clay trail behind
+      dents.push({
+        dir: activeDent.dir.clone(),
+        depth: activeDent.depth*0.85,
+        active: false,
+        ang: (activeDent.ang||DENT_ANG)*0.9,
+        tan: activeDent.tan.clone().multiplyScalar(0.65)
+      });
+      if (dents.length > 16) dents.splice(0, dents.length-16);
+      activeDent.dir = newDir.clone();
+    } else {
+      activeDent.dir.copy(newDir);
+    }
+  }
+  hitUV = hit.uv.clone();
+  hitPoint = hit.point.clone();
+  hitDir = newDir;
+});
+
+function release(){
+  if (!pressing) return;
+  pressing = false;
+  if (activeDent) activeDent.active = false;
+  if (pressT < 0.22 && !exploded) { // short tap
+    stampDamage(hitUV.x, hitUV.y, 0.26, 26);  // biggest crack at touch point
+    stampGlobal(0.09);                         // faint cracks everywhere
+    spawnFlakes(hitPoint, 3 + (Math.random()*3|0));
+    progress = Math.min(1, progress + TAP_STEP);
+    repaint();
+    if (progress >= 1) explode();
+  }
+  activeDent = null;
+}
+addEventListener('pointerup', release);
+addEventListener('pointercancel', release);
+
+// ---------- loop ----------
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // dents: springy rubber — overshoots slightly, jiggles back
+  let anyDent = false;
+  for (let i = dents.length-1; i >= 0; i--) {
+    const d = dents[i];
+    if (d.vel === undefined) d.vel = 0;
+    if (d.active) {
+      // target depth: taps stay shallow, holding sinks deeper and wider over time
+      const holdK = Math.min(1, Math.max(0, (pressT-0.22)/(HOLD_FULL*0.8)));
+      const target = TAP_DEPTH + (HOLD_DEPTH-TAP_DEPTH)*holdK;
+      d.ang = DENT_ANG + holdK*0.28;
+      // thick, viscous press-in: sinks slowly with resistance (꾸덕)
+      d.depth += (target - d.depth) * Math.min(1, dt*3.2);
+      d.vel = 0;
+    } else {
+      // angel-clay: very slow, heavy recovery, zero bounce
+      d.depth *= Math.pow(0.9955, dt*60);
+      if (d.depth < 0.0015) { dents.splice(i,1); continue; }
+    }
+    // stretch lingers and oozes back very slowly
+    if (d.tan) d.tan.multiplyScalar(Math.max(0, 1 - dt*(d.active ? 0.45 : 0.7)));
+    anyDent = true;
+  }
+  if (anyDent || ballGeo.userData.dirty) {
+    applyDents();
+    ballGeo.userData.dirty = anyDent;
+  }
+
+  // grip feedback: pushed back & squashed while pressed, jelly-wobbles on release
+  {
+    const curDepth = activeDent ? Math.max(0, activeDent.depth) : 0;
+    if (pressing && hitDir) {
+      _pushTarget.copy(hitDir).multiplyScalar(-0.07 * (curDepth / HOLD_DEPTH));
+      ball.position.lerp(_pushTarget, Math.min(1, dt*3.5));
+      wob += ((curDepth*0.035) - wob) * Math.min(1, dt*3.5);
+      wobVel = 0;
+    } else {
+      // heavy, syrup-slow settle — no jiggle at all
+      wob += (0 - wob) * Math.min(1, dt*1.3);
+      ball.position.lerp(_zero, Math.min(1, dt*1.3));
+    }
+    ball.scale.set(1 + wob*0.35, 1 - wob, 1 + wob*0.35);
+  }
+
+  // gauge
+  {
+    const pct = Math.round(progress*100);
+    gaugeFill.style.width = pct + '%';
+    const hue = 95 - progress*95; // green -> red
+    gaugeFill.style.background = 'hsl(' + hue + ', 70%, 55%)';
+    gaugeLabel.textContent = exploded ? 'BOOM!' : 'CRACK ' + pct + '%';
+    gaugeWrap.classList.toggle('danger', progress > 0.75 && !exploded);
+  }
+
+  // long press
+  if (pressing && !exploded) {
+    pressT += dt;
+    if (pressT > 0.22) {
+      progress = Math.min(1, progress + dt/HOLD_FULL);
+      const radius = 26 + Math.min(1, (pressT-0.22)/1.5) * 46;
+      stampDamage(hitUV.x, hitUV.y, dt*1.05, radius); // main crack at touch
+      if (Math.random() < dt*8) stampGlobal(0.05);    // creeping cracks elsewhere
+      repaintTimer += dt;
+      if (repaintTimer > 0.1) {
+        repaintTimer = 0;
+        repaint();
+        vibrate(8);
+        if (Math.random() < 0.75) spawnFlakes(hitPoint, 1 + (Math.random()*3|0));
+        // occasional tiny flakes from random spots as the whole ball cracks
+        if (Math.random() < 0.4) {
+          const p = new THREE.Vector3(Math.random()*2-1, Math.random()*2-1, Math.random()*2-1).normalize();
+          spawnFlakes(p, 1, 0.5);
+        }
+      }
+      if (progress >= 1) explode();
+    }
+  }
+
+  // respawn after burst
+  if (exploded) {
+    respawnT -= dt;
+    if (respawnT <= 0) respawn();
+  }
+
+  // flakes
+  for (let i = flakes.length-1; i >= 0; i--) {
+    const f = flakes[i], u = f.userData;
+    u.vel.y -= 2.2*dt;
+    f.position.addScaledVector(u.vel, dt);
+    f.rotation.x += u.rot.x*dt; f.rotation.y += u.rot.y*dt; f.rotation.z += u.rot.z*dt;
+    u.life -= dt;
+    f.material.opacity = Math.min(1, u.life/0.6);
+    if (u.life <= 0) { scene.remove(f); f.geometry.dispose(); f.material.dispose(); flakes.splice(i,1); }
+  }
+
+  renderer.render(scene, camera);
+}
+
+repaint();
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+})();
+</script>
+</body>
+</html>
