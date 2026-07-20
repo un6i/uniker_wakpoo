@@ -1,14 +1,33 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { TeamCreate } from "@/components/team/TeamCreate";
+import { TeamEmpty } from "@/components/team/TeamEmpty";
+import { TeamInvite } from "@/components/team/TeamInvite";
+import { TeamJoin } from "@/components/team/TeamJoin";
+import { TeamMemberModal } from "@/components/team/TeamMemberModal";
+import { TeamRoom } from "@/components/team/TeamRoom";
+import {
+  CURRENT_USER_ID,
+  SAMPLE_INVITE_CODE,
+  sampleTeam,
+  sampleTeamMembers,
+  sampleTeamTasks,
+} from "@/data/teamMockData";
+import type {
+  Team,
+  TeamCreateInput,
+  TeamMember,
+  TeamStage,
+  TeamTask,
+  TeamTaskView,
+} from "@/types/team";
 
 type RecordType = "기간" | "반복" | "집중";
 type Todo = { id:number; title:string; category:string; priority:string; recordType:RecordType; period:string; deadline:string; repeat:string; done:boolean; completedAt?:string; focusMinutes?:number };
 type Category = { id:string; name:string; icon:string };
 type View = "home" | "focus" | "team" | "my" | "records";
-type TeamStage = "empty" | "create" | "invite" | "home";
-type Sheet = null | "join" | "teamTodo" | "profile" | "service" | "archive" | "recordDetail";
-type TeamTodo = { id:number; title:string; owner:string; done:boolean };
+type Sheet = null | "profile" | "service" | "archive" | "recordDetail";
 
 const starterTodos: Todo[] = [];
 const initialCategories: Category[] = [
@@ -65,7 +84,24 @@ function createInitialForm(category="학업"){
 }
 
 const initialForm = createInitialForm();
-const initialTeamForm = { category:"학업", name:"", deadline:koreaDateISO(7) };
+const TEAM_STORAGE_KEY = "wakpoo-team-state-v1";
+const TEAM_DEMO_FOCUS_SECONDS = 5;
+
+function cloneTeamMembers() {
+  return sampleTeamMembers.map((member) => ({
+    ...member,
+    completedTaskIds: [...member.completedTaskIds],
+    totalTaskIds: [...member.totalTaskIds],
+  }));
+}
+
+function cloneTeamTasks() {
+  return sampleTeamTasks.map((task) => ({ ...task }));
+}
+
+function cloneSampleTeam() {
+  return { ...sampleTeam };
+}
 
 export default function HomePage() {
   const [todos,setTodos] = useState<Todo[]>(starterTodos);
@@ -81,17 +117,19 @@ export default function HomePage() {
   const [form,setForm] = useState(initialForm);
   const [formStep,setFormStep] = useState<"basic"|"details">("basic");
   const [teamStage,setTeamStage] = useState<TeamStage>("empty");
-  const [teamForm,setTeamForm] = useState(initialTeamForm);
-  const [teamTodos,setTeamTodos] = useState<TeamTodo[]>([
-    { id:1,title:"경쟁사 조사",owner:"나",done:true },
-    { id:2,title:"PPT 제작",owner:"민지",done:false },
-    { id:3,title:"발표 대본 작성",owner:"준호",done:false },
-  ]);
+  const [team,setTeam] = useState<Team|null>(null);
+  const [teamMembers,setTeamMembers] = useState<TeamMember[]>(cloneTeamMembers);
+  const [teamTasks,setTeamTasks] = useState<TeamTask[]>(cloneTeamTasks);
+  const [teamTaskView,setTeamTaskView] = useState<TeamTaskView>("mine");
+  const [selectedTeamMemberId,setSelectedTeamMemberId] = useState<string|null>(null);
+  const [teamFocusTaskId,setTeamFocusTaskId] = useState<number|null>(null);
+  const [focusDemoMode,setFocusDemoMode] = useState(false);
+  const [teamTaskCreateOpen,setTeamTaskCreateOpen] = useState(false);
+  const [teamAbsorbEffect,setTeamAbsorbEffect] = useState<{memberId:string;taskId:number;nonce:number}|null>(null);
+  const [teamHydrated,setTeamHydrated] = useState(false);
+  const [teamNow,setTeamNow] = useState(()=>Date.now());
+  const [nudgeEffect,setNudgeEffect] = useState<{memberId:string;nonce:number}|null>(null);
   const [sheet,setSheet] = useState<Sheet>(null);
-  const [teamTodoTitle,setTeamTodoTitle] = useState("");
-  const [teamTodoOwner,setTeamTodoOwner] = useState("나");
-  const [joinCode,setJoinCode] = useState("");
-  const [joinError,setJoinError] = useState("");
   const [notifications,setNotifications] = useState(false);
   const [nickname,setNickname] = useState("왁뿌러");
   const [nicknameDraft,setNicknameDraft] = useState("왁뿌러");
@@ -105,14 +143,14 @@ export default function HomePage() {
   const [archiveSelectedId,setArchiveSelectedId] = useState<number|null>(null);
 
   const doneCount = todos.filter(t=>t.done).length;
-  const progress = todos.length ? Math.round(doneCount/todos.length*100) : 0;
   const selectedTodo = todos.find(t=>t.id===selectedId);
-  const teamDone = teamTodos.filter(t=>t.done).length;
-  const teamProgress = teamTodos.length ? Math.round(teamDone/teamTodos.length*100) : 0;
+  const selectedTeamTask = teamTasks.find(task=>task.id===teamFocusTaskId);
+  const selectedFocusTitle = selectedTeamTask?.title || selectedTodo?.title.replace("\n"," ");
+  const selectedTeamMember = teamMembers.find(member=>member.id===selectedTeamMemberId);
+  const selectedTeamMemberTasks = selectedTeamMember ? teamTasks.filter(task=>task.ownerId===selectedTeamMember.id) : [];
   const completedTodos = [...todos.filter(todo=>todo.done)].sort((a,b)=>(b.completedAt||"").localeCompare(a.completedAt||""));
   const archiveSelectedTodo = completedTodos.find(todo=>todo.id===archiveSelectedId);
   const todayDoneCount = completedTodos.filter(todo=>todoCompletionDate(todo)===koreaDateISO()).length;
-  const totalFocusMinutes = completedTodos.reduce((sum,todo)=>sum+(todo.focusMinutes||focusMinutes),0);
   const periodTodos = completedTodos.filter(todo=>todo.recordType==="기간");
   const periodFocusMinutes = periodTodos.reduce((sum,todo)=>sum+(todo.focusMinutes||focusMinutes),0);
   const repeatTodos = completedTodos.filter(todo=>todo.recordType==="반복");
@@ -146,20 +184,138 @@ export default function HomePage() {
     const timer = window.setInterval(updateTime,1000);
     return ()=>window.clearInterval(timer);
   },[]);
+  useEffect(()=>{
+    let storedTeam: Team|null = null;
+    let storedStage: TeamStage|null = null;
+    let storedMembers: TeamMember[]|null = null;
+    let storedTasks: TeamTask[]|null = null;
+    try {
+      const raw = window.localStorage.getItem(TEAM_STORAGE_KEY);
+      if (raw) {
+        const stored = JSON.parse(raw) as {
+          stage?:TeamStage;
+          team?:Team|null;
+          members?:TeamMember[];
+          tasks?:TeamTask[];
+        };
+        if (stored.team) storedTeam = stored.team;
+        if (stored.stage) storedStage = stored.stage;
+        if (Array.isArray(stored.members)) storedMembers = stored.members;
+        if (Array.isArray(stored.tasks)) storedTasks = stored.tasks;
+      }
+    } catch {
+      window.localStorage.removeItem(TEAM_STORAGE_KEY);
+    }
+    window.queueMicrotask(()=>{
+      if (storedTeam) setTeam(storedTeam);
+      if (storedStage) setTeamStage(storedStage);
+      if (storedMembers) setTeamMembers(storedMembers);
+      if (storedTasks) setTeamTasks(storedTasks);
+      setTeamHydrated(true);
+    });
+  },[]);
+  useEffect(()=>{
+    if(!teamHydrated) return;
+    if(teamStage==="empty" && !team) {
+      window.localStorage.removeItem(TEAM_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify({stage:teamStage,team,members:teamMembers,tasks:teamTasks}));
+  },[teamHydrated,teamStage,team,teamMembers,teamTasks]);
+  useEffect(()=>{
+    if(view!=="team" || teamStage!=="home") return;
+    const timer = window.setInterval(()=>setTeamNow(Date.now()),1000);
+    return ()=>window.clearInterval(timer);
+  },[view,teamStage]);
+  useEffect(()=>{
+    function handleWakpooMessage(event:MessageEvent){
+      if(!event.data || event.data.type!=="wakpoo-crushed") return;
+      if(teamFocusTaskId===null) {
+        setToast("왁뿌를 부쉈어요!");
+        return;
+      }
+      const taskId = teamFocusTaskId;
+      const crushedAt = new Date().toISOString();
+      let ownerId = CURRENT_USER_ID;
+      setTeamTasks(items=>items.map(task=>{
+        if(task.id!==taskId) return task;
+        ownerId = task.ownerId;
+        if(task.status==="crushed") return task;
+        return {...task,status:"crushed",completedAt:task.completedAt||crushedAt,crushedAt};
+      }));
+      setTeamMembers(items=>items.map(member=>{
+        if(member.id!==ownerId) return member;
+        return {
+          ...member,
+          completedTaskIds: member.completedTaskIds.includes(taskId)
+            ? member.completedTaskIds
+            : [...member.completedTaskIds, taskId],
+          totalTaskIds: member.totalTaskIds.includes(taskId)
+            ? member.totalTaskIds
+            : [...member.totalTaskIds, taskId],
+        };
+      }));
+      const nonce = Date.now();
+      setSuccessOpen(false);
+      setRunning(false);
+      setTeamFocusTaskId(null);
+      setFocusDemoMode(false);
+      setView("team");
+      setTeamStage("home");
+      setTeamAbsorbEffect({memberId:ownerId,taskId,nonce});
+      setToast("내 왁뿌의 파편이 공동 왁뿌에 흡수됐어요!");
+      window.setTimeout(()=>setTeamAbsorbEffect(current=>current?.nonce===nonce?null:current),1400);
+    }
+    window.addEventListener("message", handleWakpooMessage);
+    return ()=>window.removeEventListener("message", handleWakpooMessage);
+  },[teamFocusTaskId]);
 
   const clock = useMemo(()=>`${Math.floor(seconds/60).toString().padStart(2,"0")}:${(seconds%60).toString().padStart(2,"0")}`,[seconds]);
 
   function chooseFocusTime(minutes:number){
     if(running) return;
-    setFocusMinutes(minutes); setSeconds(minutes*60);
+    setFocusDemoMode(false); setFocusMinutes(minutes); setSeconds(minutes*60);
+  }
+  function chooseDemoFocusTime(){
+    if(running) return;
+    setFocusDemoMode(true); setSeconds(TEAM_DEMO_FOCUS_SECONDS);
   }
   function finishFocus(){
     setRunning(false);
+    if(teamFocusTaskId!==null) {
+      const completedAt = new Date().toISOString();
+      setTeamTasks(items=>items.map(task=>task.id===teamFocusTaskId && task.status!=="crushed"?{...task,status:"personalReady",completedAt}:task));
+      setSuccessOpen(true);
+      return;
+    }
     if(selectedId!==null) setTodos(items=>items.map(todo=>todo.id===selectedId?{...todo,done:true,completedAt:new Date().toISOString(),focusMinutes}:todo));
     setSuccessOpen(true);
   }
-  function closeSuccess(){ setSuccessOpen(false); setView("home"); setSelectedId(null); }
-  function leaveFocus(){ setExitOpen(false); setRunning(false); setView("home"); setSelectedId(null); }
+  function closeSuccess(){
+    setSuccessOpen(false);
+    if(teamFocusTaskId!==null) {
+      setView("team");
+      setTeamStage("home");
+      setTeamFocusTaskId(null);
+      setFocusDemoMode(false);
+      setToast("개인 왁뿌를 부수면 공동 진행률이 올라가요.");
+      return;
+    }
+    setView("home"); setSelectedId(null);
+  }
+  function leaveFocus(){
+    setExitOpen(false);
+    setRunning(false);
+    if(teamFocusTaskId!==null) {
+      setTeamTasks(items=>items.map(task=>task.id===teamFocusTaskId && task.status==="focused"?{...task,status:"todo"}:task));
+      setTeamFocusTaskId(null);
+      setFocusDemoMode(false);
+      setView("team");
+      setTeamStage("home");
+      return;
+    }
+    setView("home"); setSelectedId(null);
+  }
   function addTodo(event:FormEvent){
     event.preventDefault(); if(!form.title.trim()) return;
     setTodos(items=>[...items,{ id:Date.now(),...form,title:form.title.trim(),done:false }]);
@@ -167,12 +323,12 @@ export default function HomePage() {
   }
   function selectTodo(todo:Todo){
     setSelectedId(todo.id);
-    setEditForm({title:todo.title.replace("\n"," "),category:todo.category,priority:todo.priority,period:todo.period,deadline:todo.deadline,repeat:todo.repeat});
+    setEditForm({title:todo.title.replace("\n"," "),category:todo.category,priority:todo.priority,recordType:todo.recordType,period:todo.period,deadline:todo.deadline,repeat:todo.repeat});
     setTodoPanel(todo); setTodoPanelMode("actions");
   }
   function startTodoFocus(){
     if(!todoPanel) return;
-    setSelectedId(todoPanel.id); setSeconds(focusMinutes*60); setRunning(false); setTodoPanel(null); setView("focus");
+    setSelectedId(todoPanel.id); setTeamFocusTaskId(null); setFocusDemoMode(false); setSeconds(focusMinutes*60); setRunning(false); setTodoPanel(null); setView("focus");
   }
   function saveTodo(event:FormEvent){
     event.preventDefault();
@@ -201,27 +357,107 @@ export default function HomePage() {
     setEditForm(current=>({...current,category:resolveCategory(current.category)}));
     setCategories(normalized);
   }
-  function createTeam(event:FormEvent){
-    event.preventDefault(); if(!teamForm.name.trim()) return;
-    setTeamStage("invite"); setToast("팀이 만들어졌어요");
+  function createTeam(input:TeamCreateInput){
+    setTeam({
+      id:`team-${Date.now()}`,
+      name:input.name,
+      category:input.category,
+      deadline:input.deadline,
+      description:input.description,
+      inviteCode:SAMPLE_INVITE_CODE,
+      completed:false,
+    });
+    setTeamMembers(cloneTeamMembers());
+    setTeamTasks(cloneTeamTasks());
+    setTeamStage("invite");
+    setToast("팀이 만들어졌어요.");
   }
   function joinTeam(){
-    if(joinCode.trim().toUpperCase()!=="WAK715"){ setJoinError("팀 코드를 확인해주세요."); return; }
-    setJoinError(""); setSheet(null); setTeamForm({category:"프로젝트",name:"AI 서비스 발표",deadline:"2026-07-22"}); setTeamStage("home"); setToast("팀에 참가했어요");
+    setTeam(cloneSampleTeam());
+    setTeamMembers(cloneTeamMembers());
+    setTeamTasks(cloneTeamTasks());
+    setTeamStage("home");
+    setToast("팀에 참가했어요.");
   }
-  function addTeamTodo(event:FormEvent){
-    event.preventDefault(); if(!teamTodoTitle.trim()) return;
-    setTeamTodos(items=>[...items,{id:Date.now(),title:teamTodoTitle.trim(),owner:teamTodoOwner,done:false}]);
-    setTeamTodoTitle(""); setTeamTodoOwner("나"); setSheet(null); setToast("팀 Todo를 추가했어요");
+  function finishInvite(){
+    setTeamStage("home");
+    setToast("팀 방이 준비됐어요.");
   }
-  function toggleTeamTodo(id:number){
-    setTeamTodos(items=>items.map(t=>t.id===id?{...t,done:!t.done}:t)); setToast("공동 왁뿌에 데미지가 반영됐어요");
+  function nudgeMember(memberId:string){
+    const member = teamMembers.find(item=>item.id===memberId);
+    if(!member || member.id===CURRENT_USER_ID) return;
+    const now = Date.now();
+    if((member.nudgeCooldownUntil||0)>now) {
+      setToast(`${member.name}님에게는 잠시 후 다시 보낼 수 있어요.`);
+      return;
+    }
+    const nonce = now;
+    setTeamMembers(items=>items.map(item=>item.id===memberId?{...item,nudgeCooldownUntil:now+10000}:item));
+    setNudgeEffect({memberId,nonce});
+    setToast(`${member.name}님에게 응원을 보냈어요!`);
+    window.setTimeout(()=>setNudgeEffect(current=>current?.nonce===nonce?null:current),900);
+  }
+  function selectTeamTask(task:TeamTask){
+    const owner = teamMembers.find(member=>member.id===task.ownerId);
+    if(task.ownerId!==CURRENT_USER_ID) {
+      setToast(`${owner?.name||"팀원"}님이 맡은 과업이에요.`);
+      return;
+    }
+    if(task.status==="crushed") {
+      setToast("이미 공동 왁뿌에 반영된 과업이에요.");
+      return;
+    }
+    setSelectedId(null);
+    setTeamFocusTaskId(task.id);
+    if(task.status==="personalReady") {
+      setSuccessOpen(true);
+      return;
+    }
+    setTeamTasks(items=>items.map(item=>item.id===task.id?{...item,status:"focused"}:item));
+    setFocusDemoMode(true);
+    setSeconds(TEAM_DEMO_FOCUS_SECONDS);
+    setRunning(false);
+    setView("focus");
+    setToast("팀 과업 집중을 시작해요.");
+  }
+  function addSampleTeamTask(){
+    const id = Date.now();
+    const nextTask: TeamTask = {
+      id,
+      title: "추가 발표 자료 점검",
+      category: "프로젝트",
+      estimatedMinutes: 25,
+      ownerId: CURRENT_USER_ID,
+      status: "todo",
+    };
+    setTeamTasks(items=>[...items,nextTask]);
+    setTeamMembers(items=>items.map(member=>member.id===CURRENT_USER_ID?{...member,totalTaskIds:[...member.totalTaskIds,id]}:member));
+    setTeamTaskCreateOpen(false);
+    setTeamTaskView("mine");
+    setToast("샘플 팀 과업을 추가했어요.");
+  }
+  function showTeamInfo(){
+    setToast(team?`${team.name} · ${team.description}`:"팀 정보를 불러오는 중이에요.");
+  }
+  function resetTeamState(){
+    setTeam(null);
+    setTeamStage("empty");
+    setTeamMembers(cloneTeamMembers());
+    setTeamTasks(cloneTeamTasks());
+    setTeamTaskView("mine");
+    setSelectedTeamMemberId(null);
+    setTeamFocusTaskId(null);
+    setTeamTaskCreateOpen(false);
+    setTeamAbsorbEffect(null);
+    setNudgeEffect(null);
+    window.localStorage.removeItem(TEAM_STORAGE_KEY);
+    setToast("팀 상태를 초기화했어요.");
   }
   function saveProfile(event:FormEvent){ event.preventDefault(); if(!nicknameDraft.trim()) return; setNickname(nicknameDraft.trim()); setSheet(null); setToast("프로필을 수정했어요"); }
 
   return (
     <main className="stage">
-      <section className={`phone ${view==="focus"?"focus-phone":""} ${view==="records"?"records-phone":""}`} aria-label="WAKPOO 모바일 프로토타입">
+      <section className={`phone ${view==="focus"?"focus-phone":""} ${view==="records"?"records-phone":""} ${view==="team"?"team-phone":""}`} aria-label="WAKPOO 모바일 프로토타입">
         <div className="statusbar" aria-hidden="true"><span>{koreaTime}</span><span className="island"/><span>● ◔ ▰</span></div>
 
         {view==="home" && <MainHomeView todos={todos} categories={categories} onCategoriesChange={saveCategories} onAdd={category=>{setForm(createInitialForm(category));setFormStep("basic");setAdding(true)}} onTodo={selectTodo} onView={setView}/>} 
@@ -229,10 +465,10 @@ export default function HomePage() {
         {view==="focus" && (
           <section className="focus-view">
             <button className="close-focus" onClick={()=>setExitOpen(true)} aria-label="집중 모드 나가기">×</button>
-            <div className="focus-copy"><h1>STAY<br/>FOCUSED!</h1><p>왁뿌들이 만들어지고 있어요</p>{selectedTodo&&<span>{selectedTodo.title.replace("\n"," ")}</span>}</div>
+            <div className="focus-copy"><h1>STAY<br/>FOCUSED!</h1><p>{teamFocusTaskId!==null?"공동 왁뿌로 보낼 개인 왁뿌를 만들어요":"왁뿌들이 만들어지고 있어요"}</p>{selectedFocusTitle&&<span>{selectedFocusTitle}</span>}</div>
             <div className="focus-duration" aria-label="집중 시간 선택">
               <small>집중 시간</small>
-              <div>{[25,50,90].map(minutes=><button key={minutes} className={focusMinutes===minutes?"selected":""} onClick={()=>chooseFocusTime(minutes)} disabled={running} aria-label={`${minutes}분 집중`}>{minutes}분</button>)}</div>
+              <div>{[25,50,90].map(minutes=><button key={minutes} className={!focusDemoMode&&focusMinutes===minutes?"selected":""} onClick={()=>chooseFocusTime(minutes)} disabled={running} aria-label={`${minutes}분 집중`}>{minutes}분</button>)}<button className={`demo-chip ${focusDemoMode?"selected":""}`} onClick={chooseDemoFocusTime} disabled={running} aria-label="시연 모드 5초 집중">시연 5초</button></div>
             </div>
             <button className={`timer-ring ${running?"is-running":""}`} onClick={()=>setRunning(v=>!v)} aria-label={running?"타이머 일시정지":"타이머 시작"}><span>{clock}</span><small>{running?"집중 중":"눌러서 시작"}</small></button>
             <button className="demo-complete" onClick={finishFocus}>시연용 집중 완료</button>
@@ -240,55 +476,35 @@ export default function HomePage() {
         )}
 
         {view==="team" && (
-          <section className="tab-page team-page">
-            <header className="tab-header"><span>WAKPOO TEAM</span><h1>같이 부수면<br/>더 빨라요!</h1><p>팀원의 Todo가 끝날 때마다 공동 왁뿌에 균열이 생겨요.</p></header>
-            {teamStage==="empty" && (
-              <div className="team-empty"><div className="team-orb"><span>+</span><b>공동 왁뿌</b></div><strong>아직 참여한 팀이 없어요</strong><p>시연용 팀을 만들거나 코드로 참가해보세요.</p><button className="solid-action" onClick={()=>setTeamStage("create")}>팀 만들기</button><button className="line-action" onClick={()=>setSheet("join")}>팀 참가하기</button></div>
-            )}
-            {teamStage==="create" && (
-              <form className="team-form" onSubmit={createTeam}>
-                <button type="button" className="text-back" onClick={()=>setTeamStage("empty")}>← 돌아가기</button>
-                <label>카테고리<select value={teamForm.category} onChange={e=>setTeamForm({...teamForm,category:e.target.value})}><option>학업</option><option>프로젝트</option><option>개인</option></select></label>
-                <label>팀 이름<input value={teamForm.name} onChange={e=>setTeamForm({...teamForm,name:e.target.value})} placeholder="팀플 주제를 입력하세요" autoFocus/></label>
-                <label>마감일<input type="date" value={teamForm.deadline} onChange={e=>setTeamForm({...teamForm,deadline:e.target.value})}/></label>
-                <button className="solid-action" disabled={!teamForm.name.trim()}>팀 생성 완료</button>
-              </form>
-            )}
-            {teamStage==="invite" && (
-              <div className="invite-panel"><div className="invite-orb">초대</div><strong>{teamForm.name}</strong><p>팀원에게 아래 코드를 공유해주세요.</p><button className="invite-code" onClick={()=>setToast("초대 코드 WAK715를 복사했어요")}>WAK715 <span>복사</span></button><div className="share-row"><button onClick={()=>setToast("공유 링크를 복사했어요")}>링크</button><button onClick={()=>setToast("카카오톡 공유 시연 완료")}>카카오톡</button><button onClick={()=>setToast("메시지 공유 시연 완료")}>메시지</button></div><button className="solid-action" onClick={()=>setTeamStage("home")}>시연용 팀원 참가</button></div>
-            )}
-            {teamStage==="home" && (
-              <div className="team-dashboard">
-                <div className="team-title-row"><div><small>{teamForm.category} 프로젝트</small><strong>{teamForm.name||"AI 서비스 발표"}</strong></div><span>D-7</span></div>
-                <button className={`boss-orb ${teamProgress===100?"ready":""}`} onClick={()=>setToast(teamProgress===100?"공동 왁뿌 획득 완료!":"모든 Todo가 완료되면 터뜨릴 수 있어요")}><b>{teamProgress}%</b><span>{teamProgress===100?"눌러서 획득":"공동 왁뿌"}</span></button>
-                <div className="member-row" aria-label="팀원 진행 현황">
-                  <button onClick={()=>setToast("내 Todo를 확인했어요")}><span className={`member-dot ${teamTodos.some(t=>t.owner==="나"&&t.done)?"done":""}`}>나</span><b>나</b><small>{teamTodos.filter(t=>t.owner==="나"&&t.done).length}개 완료</small></button>
-                  <button onClick={()=>setToast("민지님에게 재촉 알림을 보냈어요") }><span className="member-dot">민지</span><b>민지</b><small>콕 찌르기</small></button>
-                  <button onClick={()=>setToast("준호님에게 재촉 알림을 보냈어요") }><span className="member-dot">준호</span><b>준호</b><small>콕 찌르기</small></button>
-                </div>
-                <div className="team-todo-head"><strong>팀 Todo</strong><button onClick={()=>setSheet("teamTodo")}>+ 추가</button></div>
-                <div className="team-todo-list">{teamTodos.map(t=><button key={t.id} className={t.done?"done":""} onClick={()=>toggleTeamTodo(t.id)}><span>{t.done?"✓":"○"}</span><b>{t.title}</b><small>{t.owner}</small></button>)}</div>
-                <button className="line-action" onClick={()=>setTeamStage("empty")}>팀 나가기</button>
-              </div>
-            )}
+          <>
+            <section className="tab-page team-page">
+              {teamStage==="empty" && <TeamEmpty onCreate={()=>setTeamStage("create")} onJoin={()=>setTeamStage("join")}/>}
+              {teamStage==="create" && <TeamCreate onCreate={createTeam} onBack={()=>setTeamStage("empty")}/>}
+              {teamStage==="join" && <TeamJoin validCode={SAMPLE_INVITE_CODE} onJoin={joinTeam} onBack={()=>setTeamStage("empty")}/>}
+              {teamStage==="invite" && team && <TeamInvite team={team} onDone={finishInvite} onBack={()=>setTeamStage("create")} onToast={setToast}/>}
+              {teamStage==="home" && team && <TeamRoom team={team} members={teamMembers} tasks={teamTasks} currentUserId={CURRENT_USER_ID} taskView={teamTaskView} now={teamNow} nudgeEffect={nudgeEffect} absorbEffect={teamAbsorbEffect} onTaskViewChange={setTeamTaskView} onMemberSelect={setSelectedTeamMemberId} onNudge={nudgeMember} onTaskSelect={selectTeamTask} onAddTask={()=>setTeamTaskCreateOpen(true)} onTeamInfo={showTeamInfo} onResetTeam={resetTeamState}/>}
+              {teamStage!=="empty" && !team && teamStage!=="create" && teamStage!=="join" && <TeamEmpty onCreate={()=>setTeamStage("create")} onJoin={()=>setTeamStage("join")}/>}
+            </section>
             <FixedNav current="team" onView={setView}/>
-          </section>
+          </>
         )}
 
         {view==="my" && (
-          <section className="tab-page my-page">
-            <header className="tab-header"><span>MY WAKPOO</span><h1>오늘도 하나씩<br/>부수는 중!</h1></header>
-            <button className="profile-card" onClick={()=>{setNicknameDraft(nickname);setSheet("profile")}}><div className="avatar">왁</div><div><strong>{nickname}</strong><span>Lv. 3 · 집중 새싹</span></div><i>›</i></button>
-            <div className="my-stats"><div><b>{doneCount}</b><span>오늘 획득</span></div><div><b>{todos.length}</b><span>등록 Todo</span></div><div><b>90m</b><span>집중 시간</span></div></div>
-            <div className="settings-card">
-              <button onClick={()=>{setNotifications(v=>!v);setToast(notifications?"알림을 껐어요":"알림을 켰어요")}}><span>◉</span><b>알림 설정</b><i>{notifications?"켜짐":"꺼짐"}</i></button>
-              <button onClick={()=>setSheet("archive")}><span>▣</span><b>왁뿌 기록</b><i>{doneCount}개</i></button>
-              <button onClick={()=>setView("records")}><span>↗</span><b>오늘의 타임로그</b><i>보기</i></button>
-              <button onClick={()=>setSheet("service")}><span>?</span><b>서비스 안내</b><i>›</i></button>
-            </div>
-            <p className="prototype-label">시연용 프로토타입 · 데이터는 기기에만 저장돼요</p>
+          <>
+            <section className="tab-page my-page">
+              <header className="tab-header"><span>MY WAKPOO</span><h1>오늘도 하나씩<br/>부수는 중!</h1></header>
+              <button className="profile-card" onClick={()=>{setNicknameDraft(nickname);setSheet("profile")}}><div className="avatar">왁</div><div><strong>{nickname}</strong><span>Lv. 3 · 집중 새싹</span></div><i>›</i></button>
+              <div className="my-stats"><div><b>{doneCount}</b><span>오늘 획득</span></div><div><b>{todos.length}</b><span>등록 Todo</span></div><div><b>90m</b><span>집중 시간</span></div></div>
+              <div className="settings-card">
+                <button onClick={()=>{setNotifications(v=>!v);setToast(notifications?"알림을 껐어요":"알림을 켰어요")}}><span>◉</span><b>알림 설정</b><i>{notifications?"켜짐":"꺼짐"}</i></button>
+                <button onClick={()=>setSheet("archive")}><span>▣</span><b>왁뿌 기록</b><i>{doneCount}개</i></button>
+                <button onClick={()=>setView("records")}><span>↗</span><b>오늘의 타임로그</b><i>보기</i></button>
+                <button onClick={()=>setSheet("service")}><span>?</span><b>서비스 안내</b><i>›</i></button>
+              </div>
+              <p className="prototype-label">시연용 프로토타입 · 데이터는 기기에만 저장돼요</p>
+            </section>
             <FixedNav current="records" onView={setView}/>
-          </section>
+          </>
         )}
 
         {view==="records" && (
@@ -333,10 +549,10 @@ export default function HomePage() {
           <button className="edit-save" type="submit">수정 저장</button>
           <button className="edit-back" type="button" onClick={()=>setTodoPanelMode("actions")}>이전</button>
         </form>}</Modal>}
-        {sheet==="join"&&<Modal title="팀 참가하기" onClose={()=>setSheet(null)}><div className="modal-form"><p>초대받은 팀 코드를 입력해주세요.<br/><b>시연 코드: WAK715</b></p><input value={joinCode} onChange={e=>{setJoinCode(e.target.value);setJoinError("")}} placeholder="팀 코드" autoFocus/>{joinError&&<em>{joinError}</em>}<button className="solid-action" onClick={joinTeam}>팀 참가하기</button></div></Modal>}
-        {sheet==="teamTodo"&&<Modal title="팀 Todo 추가" onClose={()=>setSheet(null)}><form className="modal-form" onSubmit={addTeamTodo}><input value={teamTodoTitle} onChange={e=>setTeamTodoTitle(e.target.value)} placeholder="세부 Todo를 입력하세요" autoFocus/><select value={teamTodoOwner} onChange={e=>setTeamTodoOwner(e.target.value)}><option>나</option><option>민지</option><option>준호</option></select><button className="solid-action">추가하기</button></form></Modal>}
         {sheet==="profile"&&<Modal title="프로필 수정" onClose={()=>setSheet(null)}><form className="modal-form" onSubmit={saveProfile}><input value={nicknameDraft} onChange={e=>setNicknameDraft(e.target.value)} aria-label="닉네임" autoFocus/><button className="solid-action">저장하기</button></form></Modal>}
         {sheet==="service"&&<Modal title="WAKPOO 안내" onClose={()=>setSheet(null)}><div className="service-copy"><div className="mini-orb">왁</div><p>Todo를 집중 미션으로 바꾸고, 완료 순간 왁뿌를 획득하는 게임형 생산성 서비스예요.</p><ul><li>Todo 하나 = 미완성 왁뿌 하나</li><li>집중 성공 = Todo 완료 + 왁뿌 획득</li><li>팀 Todo 완료 = 공동 왁뿌 데미지</li></ul></div></Modal>}
+        {teamTaskCreateOpen&&<Modal title="팀 과업 추가" onClose={()=>setTeamTaskCreateOpen(false)}><div className="team-task-add-modal"><p>현재 프로토타입에서는 샘플 팀 과업을 추가해 시연 흐름을 확인합니다.</p><button className="solid-action" type="button" onClick={addSampleTeamTask}>샘플 과업 생성</button><button className="line-action" type="button" onClick={()=>setTeamTaskCreateOpen(false)}>닫기</button></div></Modal>}
+        {selectedTeamMember&&<TeamMemberModal member={selectedTeamMember} tasks={selectedTeamMemberTasks} onClose={()=>setSelectedTeamMemberId(null)}/>}
         {sheet==="archive"&&<div className="archive-layer" role="dialog" aria-modal="true" aria-label="왁뿌볼 아카이브">
           <section className="archive-screen">
             <header className="archive-screen-head"><strong>왁뿌볼 아카이브</strong><button onClick={()=>{setArchiveSelectedId(null);setSheet(null)}} aria-label="아카이브 닫기">×</button></header>
@@ -361,7 +577,7 @@ export default function HomePage() {
         {sheet==="recordDetail"&&<Modal title="왁뿌 상세" onClose={()=>setSheet(null)}><div className="record-detail"><div className="detail-orb">완료</div><strong>{selectedTodo?.title.replace("\n"," ")}</strong><dl><div><dt>획득 날짜</dt><dd>{koreaDateLong(selectedTodo?.period||koreaDateISO())}</dd></div><div><dt>집중 시간</dt><dd>{focusMinutes}분</dd></div><div><dt>카테고리</dt><dd>{selectedTodo?.category}</dd></div><div><dt>중요도</dt><dd>{selectedTodo?.priority}</dd></div></dl></div></Modal>}
 
         {exitOpen&&<div className="overlay dark" role="dialog" aria-modal="true" aria-label="집중 모드 나가기 확인"><div className="confirm-modal"><strong>정말 나가시겠어요?</strong><p>지금 나가면 집중 미션에 실패하며,<br/>이번 왁뿌를 획득할 수 없어요.</p><button onClick={leaveFocus}>나가기</button><button className="primary" onClick={()=>setExitOpen(false)}>이어서 하기</button></div></div>}
-        {successOpen&&<div className="overlay success-layer" role="dialog" aria-modal="true" aria-label="집중 성공"><div className="reward-ball-stage" aria-label="획득한 초록색 3D 왁뿌"><iframe className="reward-ball-frame" src="crack_ball.html" title="획득한 초록색 3D 왁뿌" sandbox="allow-scripts"/></div><div className="reward-card"><strong>할 일 왁뿌 획득 완료</strong><p>왁뿌를 클릭해서 부숴보세요!</p><button onClick={closeSuccess}>홈으로 돌아가기</button></div></div>}
+        {successOpen&&<div className="overlay success-layer" role="dialog" aria-modal="true" aria-label="집중 성공"><div className="reward-ball-stage" aria-label="획득한 초록색 3D 왁뿌"><iframe className="reward-ball-frame" src="crack_ball.html" title="획득한 초록색 3D 왁뿌" sandbox="allow-scripts"/></div><div className="reward-card"><strong>{teamFocusTaskId!==null?"개인 왁뿌 완성":"할 일 왁뿌 획득 완료"}</strong><p>왁뿌를 클릭해서 부숴보세요!</p><button onClick={closeSuccess}>{teamFocusTaskId!==null?"팀 방으로 돌아가기":"홈으로 돌아가기"}</button></div></div>}
         {toast&&<div className="toast" role="status">{toast}</div>}
       </section>
       <p className="desktop-note">모바일 화면에 최적화된 WAKPOO 프로토타입입니다.</p>
@@ -376,7 +592,9 @@ function MainHomeView({todos,categories,onCategoriesChange,onAdd,onTodo,onView}:
   const [iconPickerId,setIconPickerId] = useState<string|null>(null);
   const activeCategory = categories.find(category=>category.id===filterId)||categories[0];
   useEffect(()=>{
-    if(!categories.some(category=>category.id===filterId)) setFilterId(categories[0]?.id||"");
+    if(!categories.some(category=>category.id===filterId)) {
+      window.queueMicrotask(()=>setFilterId(categories[0]?.id||""));
+    }
   },[categories,filterId]);
   const displayTodos = todos
     .map(todo=>({...todo,badge:todo.recordType}))

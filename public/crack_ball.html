@@ -302,6 +302,11 @@ function explode(){
   ball.scale.set(1,1,1);
   vibrate([80,40,140]);
   document.getElementById('hint').style.opacity = 0;
+  try {
+    window.parent.postMessage({ type: "wakpoo-crushed" }, "*");
+  } catch (error) {
+    // The parent app is optional when this prototype file is opened directly.
+  }
 
   // big shards -> small shards mix, flying outward
   for (let k = 0; k < 140; k++) {
