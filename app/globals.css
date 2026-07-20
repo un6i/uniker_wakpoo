@@ -209,6 +209,14 @@ button { color:inherit; }
 .team-create-card b { color:#c4b5fd; font-size:11px; }
 .team-create-card input,.team-create-card textarea,.team-join-sheet input { width:100%; border:1px solid #ffffff1f; border-radius:10px; background:#ffffff10; color:#fff; outline:0; box-shadow:inset 0 0 0 1px #0002; }
 .team-create-card input,.team-join-sheet input { min-height:52px; padding:0 16px; }
+.team-date-field { position:relative; min-width:0; }
+.team-create-card .team-date-input { padding-right:58px; color-scheme:dark; }
+.team-create-card .team-date-input::-webkit-calendar-picker-indicator { width:44px; height:44px; opacity:0; cursor:pointer; }
+.team-date-picker-button { position:absolute; top:50%; right:5px; width:44px; height:44px; padding:0; transform:translateY(-50%); border:0; border-radius:14px; background:#ffffff18; color:#f5efff; display:grid; place-items:center; cursor:pointer; box-shadow:inset 0 0 0 1px #ffffff18,0 0 12px #a78bfa24; transition:background-color .15s ease, box-shadow .15s ease, transform .12s ease; }
+.team-date-picker-button svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; filter:drop-shadow(0 0 7px #c4b5fd99); }
+.team-date-picker-button:hover { background:#a78bfa33; box-shadow:inset 0 0 0 1px #d8ccff55,0 0 15px #a78bfa45; }
+.team-date-picker-button:active { transform:translateY(-50%) scale(.94); background:#c4b5fd45; }
+.team-date-picker-button:focus-visible { outline:2px solid #d8ccff; outline-offset:2px; }
 .team-create-card textarea { min-height:108px; padding:15px 16px; resize:none; line-height:1.45; }
 .team-create-card input::placeholder,.team-create-card textarea::placeholder,.team-join-sheet input::placeholder { color:#8a8194; }
 .team-create-card input:focus,.team-create-card textarea:focus,.team-join-sheet input:focus { border-color:#a78bfa; box-shadow:0 0 0 3px #a78bfa33; }

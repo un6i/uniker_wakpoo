@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import type { TeamCategory, TeamCreateInput } from "@/types/team";
 
 type TeamCreateProps = {
@@ -17,6 +17,7 @@ type TeamCreateErrors = Partial<Record<keyof TeamCreateForm, string>>;
 const categories: TeamCategory[] = ["학업", "프로젝트", "개인"];
 
 export function TeamCreate({ onCreate, onBack }: TeamCreateProps) {
+  const dateInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<TeamCreateForm>({
     name: "",
     category: "",
@@ -45,6 +46,22 @@ export function TeamCreate({ onCreate, onBack }: TeamCreateProps) {
       category: form.category,
       description: form.description.trim(),
     });
+  }
+
+  function openDatePicker() {
+    const input = dateInputRef.current;
+    if (!input) return;
+    const dateInput = input as HTMLInputElement & { showPicker?: () => void };
+    try {
+      if (typeof dateInput.showPicker === "function") {
+        dateInput.showPicker();
+        return;
+      }
+    } catch {
+      // Fall back below when the browser blocks showPicker.
+    }
+    input.focus();
+    input.click();
   }
 
   return (
@@ -97,14 +114,31 @@ export function TeamCreate({ onCreate, onBack }: TeamCreateProps) {
 
         <label className={errors.deadline ? "has-error" : ""}>
           <span>마감 날짜</span>
-          <input
-            type="date"
-            value={form.deadline}
-            onChange={(event) => {
-              setForm({ ...form, deadline: event.target.value });
-              setErrors((current) => ({ ...current, deadline: undefined }));
-            }}
-          />
+          <div className="team-date-field">
+            <input
+              ref={dateInputRef}
+              className="team-date-input"
+              type="date"
+              value={form.deadline}
+              onChange={(event) => {
+                setForm({ ...form, deadline: event.target.value });
+                setErrors((current) => ({ ...current, deadline: undefined }));
+              }}
+            />
+            <button
+              className="team-date-picker-button"
+              type="button"
+              aria-label="마감 날짜 선택"
+              onClick={openDatePicker}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M7 3.8v3.1M17 3.8v3.1" />
+                <path d="M5.8 6h12.4a2 2 0 0 1 2 2v9.6a2 2 0 0 1-2 2H5.8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
+                <path d="M4.2 10.2h15.6" />
+                <path d="M8 13.6h.1M12 13.6h.1M16 13.6h.1M8 16.6h.1M12 16.6h.1" />
+              </svg>
+            </button>
+          </div>
           {errors.deadline && <em>{errors.deadline}</em>}
         </label>
 
